@@ -248,7 +248,7 @@ class PCBCamouflageDialog(wx.Dialog):
         self.btn_generate.SetForegroundColour(wx.Colour(255, 255, 255))
         self.btn_generate.Bind(wx.EVT_BUTTON, self.OnGenerateCamo)
 
-        self.btn_clear_camo = wx.Button(panel, label="3. Clear Camo (迷彩のみ全消去)", size=(-1, 38))
+        self.btn_clear_camo = wx.Button(panel, label="3. Clear Camo (迷彩消去)", size=(-1, 38))
         self.btn_clear_camo.Bind(wx.EVT_BUTTON, self.OnClearCamoOnly)
 
         btn_sizer.Add(self.btn_generate, 2, wx.EXPAND | wx.RIGHT, 6)
@@ -395,8 +395,11 @@ class PCBCamouflageDialog(wx.Dialog):
         if self.chk_clear_existing.IsChecked():
             self.camo_gen.remove_all_camo_shapes(side=side, target_uuids=self.camo_shape_uuids)
             self.camo_shape_uuids = []
+            layer_uuids = None
+        else:
+            layer_uuids = self.camo_shape_uuids
 
-        # Generate camo layer
+        # Generate camo layer with automatic seamless merging
         try:
             count, created_uuids = self.camo_gen.generate_camouflage(
                 side=side,
@@ -406,15 +409,16 @@ class PCBCamouflageDialog(wx.Dialog):
                 pad_clearance_mm=pad_clr_mm,
                 board_margin_mm=margin_mm,
                 seed=seed,
+                existing_uuids=layer_uuids,
             )
-            self.camo_shape_uuids.extend(created_uuids)
+            self.camo_shape_uuids = created_uuids
             self.SaveConfig()
 
             # Auto-advance seed for the next layer
             self.txt_seed.SetValue(str(random.randint(1, 99999)))
 
             total_camo = len(self.camo_shape_uuids)
-            msg = f"Layer added: +{count} shapes (Total camo: {total_camo} shapes on {side}.Silkscreen)"
+            msg = f"Layer merged: {total_camo} unified shapes on {side}.Silkscreen"
             self.lbl_status.SetLabel(msg)
             self.UpdateStashStatus()
             self.RefreshUserLayerChoices()

@@ -204,9 +204,7 @@ class CamoGenerator:
                 if len(points_outer) >= 3:
                     # Form closed ribbon polygon
                     polygon_pts = points_outer + list(reversed(points_inner))
-                    outline = pcbnew.SHAPE_POLY_SET()
-                    outline.AddOutline(make_line_chain(polygon_pts))
-                    poly_set.BooleanAdd(outline)
+                    poly_set.AddOutline(make_line_chain(polygon_pts))
 
         return poly_set
 
@@ -282,8 +280,8 @@ class CamoGenerator:
                     ]))
 
                     strip_poly.BooleanIntersection(cell_poly)
-                    if strip_poly.OutlineCount() > 0:
-                        poly_set.BooleanAdd(strip_poly)
+                    for oi in range(strip_poly.OutlineCount()):
+                        poly_set.AddOutline(strip_poly.Outline(oi))
 
         return poly_set
 
@@ -325,19 +323,19 @@ class CamoGenerator:
                 pts_bot.append((x, my + half_w))
 
             strip_pts = pts_top + list(reversed(pts_bot))
-            outline = pcbnew.SHAPE_POLY_SET()
-            outline.AddOutline(make_line_chain(strip_pts))
-            poly_set.BooleanAdd(outline)
+            poly_set.AddOutline(make_line_chain(strip_pts))
 
         return poly_set
 
     def generate_camouflage(self, side="F", pattern_type="swirl", scale_mm=8.0,
                             line_width_mm=0.8, pad_clearance_mm=0.4,
-                            board_margin_mm=0.5, seed=42):
+                            board_margin_mm=0.5, seed=42, existing_uuids=None):
         """
         Main entry point to generate camouflage shapes and add them to the board.
-        Returns number of shapes added.
+        If existing_uuids is provided, automatically merges the new layer with existing shapes.
+        Returns (number of shapes added, list of created UUIDs).
         """
+        target_layer = LAYER_F_SILK if side == "F" else LAYER_B_SILK
         bounds = self.get_board_bounds(margin_mm=board_margin_mm)
 
         # 1. Generate base camo poly set based on pattern type
@@ -350,7 +348,34 @@ class CamoGenerator:
             camo_poly = self.generate_swirl_polygons(bounds, scale_mm=scale_mm,
                                                      line_width_mm=line_width_mm, seed=seed)
 
-        # 2. Clip with board boundary box
+        # 2. If layering on top of existing camo, collect existing outlines to merge seamlessly
+        existing_shapes = []
+        if existing_uuids:
+            uuid_set = set(existing_uuids)
+            for drawing in self.board.GetDrawings():
+                if drawing.GetLayer() == target_layer:
+                    uid = get_item_uuid(drawing)
+                    is_match = False
+                    if uid and uid in uuid_set:
+                        is_match = True
+                    elif isinstance(drawing, pcbnew.PCB_SHAPE) and drawing.GetShape() == pcbnew.SHAPE_T_POLY and drawing.IsFilled():
+                        is_match = True
+
+                    if is_match:
+                        existing_shapes.append(drawing)
+                        poly = drawing.GetPolyShape()
+                        for oi in range(poly.OutlineCount()):
+                            camo_poly.AddOutline(poly.Outline(oi))
+                            for hi in range(poly.HoleCount(oi)):
+                                camo_poly.AddHole(poly.Hole(oi, hi))
+
+        # Simplify polygon set to merge overlapping ribbons into unified shapes
+        try:
+            camo_poly.Simplify()
+        except Exception:
+            pass
+
+        # 3. Clip with board boundary box
         x_min, y_min, x_max, y_max = bounds
         board_box = pcbnew.SHAPE_POLY_SET()
         board_box.AddOutline(make_line_chain([
@@ -361,13 +386,23 @@ class CamoGenerator:
         ]))
         camo_poly.BooleanIntersection(board_box)
 
-        # 3. Build pad keepout and subtract
+        # 4. Build pad keepout and subtract
         keepout = self.build_pad_keepout_polyset(side=side, clearance_mm=pad_clearance_mm)
         if keepout.OutlineCount() > 0:
             camo_poly.BooleanSubtract(keepout)
 
-        # 4. Add resulting polygons to board as PCB_SHAPE
-        target_layer = LAYER_F_SILK if side == "F" else LAYER_B_SILK
+        # 5. Remove old existing shapes now that new unified poly set is ready
+        for item in existing_shapes:
+            try:
+                self.board.Remove(item)
+            except Exception:
+                pass
+            try:
+                item.Delete()
+            except Exception:
+                pass
+
+        # 6. Add resulting polygons to board as PCB_SHAPE
         count = 0
         created_uuids = []
 
