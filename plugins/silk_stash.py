@@ -7,6 +7,10 @@ and restores them back whenever needed.
 
 import pcbnew
 
+# Safe layer ID definitions across KiCad versions (F_SilkS, B_SilkS)
+LAYER_F_SILK = getattr(pcbnew, "F_SilkS", getattr(pcbnew, "F_Silkscreen", 37))
+LAYER_B_SILK = getattr(pcbnew, "B_SilkS", getattr(pcbnew, "B_Silkscreen", 36))
+
 # User layers in KiCad (User.9 down to User.1)
 # In KiCad 7/8/9, User_1 to User_9 have corresponding layer IDs.
 def get_user_layer_candidates():
@@ -81,9 +85,9 @@ class SilkStashManager:
         """Get list of silkscreen layer IDs based on side ('F', 'B', or 'both')."""
         layers = []
         if side in ("F", "both"):
-            layers.append(pcbnew.F_Silkscreen)
+            layers.append(LAYER_F_SILK)
         if side in ("B", "both"):
-            layers.append(pcbnew.B_Silkscreen)
+            layers.append(LAYER_B_SILK)
         return layers
 
     def stash_silkscreen(self, side="both", target_layer_id=None):
@@ -167,10 +171,10 @@ class SilkStashManager:
     def restore_silkscreen(self, source_layer_id, target_side="F"):
         """
         Restore items from a stashed layer back to their original silkscreen layer.
-        target_side: 'F' -> F_Silkscreen, 'B' -> B_Silkscreen
+        target_side: 'F' -> LAYER_F_SILK, 'B' -> LAYER_B_SILK
         Returns number of items restored.
         """
-        target_layer = pcbnew.F_Silkscreen if target_side == "F" else pcbnew.B_Silkscreen
+        target_layer = LAYER_F_SILK if target_side == "F" else LAYER_B_SILK
         count = 0
 
         # 1. Restore board-level drawings

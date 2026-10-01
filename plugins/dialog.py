@@ -9,7 +9,13 @@ import wx
 import pcbnew
 import random
 from .camo_generator import CamoGenerator
-from .silk_stash import SilkStashManager, find_unused_user_layer, get_user_layer_candidates
+from .silk_stash import (
+    SilkStashManager,
+    find_unused_user_layer,
+    get_user_layer_candidates,
+    LAYER_F_SILK,
+    LAYER_B_SILK,
+)
 
 
 class PCBCamouflageDialog(wx.Dialog):
@@ -254,8 +260,8 @@ class PCBCamouflageDialog(wx.Dialog):
     def UpdateStashStatus(self):
         """Update count of items on silkscreen and candidate stash layers."""
         self.board = pcbnew.GetBoard()
-        f_count = self.stash_mgr.count_items_on_layer(pcbnew.F_Silkscreen)
-        b_count = self.stash_mgr.count_items_on_layer(pcbnew.B_Silkscreen)
+        f_count = self.stash_mgr.count_items_on_layer(LAYER_F_SILK)
+        b_count = self.stash_mgr.count_items_on_layer(LAYER_B_SILK)
         text = f"Current Silkscreen: F.Silkscreen ({f_count} items), B.Silkscreen ({b_count} items)"
         self.lbl_stash_info.SetLabel(text)
 
