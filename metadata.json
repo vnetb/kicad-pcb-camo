@@ -1,0 +1,25 @@
+{
+    "$schema": "https://go.kicad.org/pcm/schemas/v1/metadata.json",
+    "name": "PCB Camouflage (Dazzle / Test Mule)",
+    "description": "Generate automotive prototype style dazzle / swirl camouflage patterns and manage silkscreen stashing.",
+    "description_full": "A KiCad PCB Editor plugin that generates automotive prototype-style dazzle / swirl camouflage patterns on silkscreen layers while automatically avoiding component pads. It also provides seamless silkscreen stashing to unused user layers (searching backwards from User.9) and one-click restoration.",
+    "identifier": "com.github.vnetb.pcb-camouflage",
+    "type": "plugin",
+    "author": {
+        "name": "vnetb",
+        "contact": {
+            "web": "https://github.com/vnetb"
+        }
+    },
+    "license": "MIT",
+    "resources": {
+        "web": "https://github.com/vnetb"
+    },
+    "versions": [
+        {
+            "version": "1.0.0",
+            "status": "stable",
+            "kicad_version": "7.0"
+        }
+    ]
+}
