@@ -35,6 +35,7 @@ class PCBCamouflageDialog(wx.Dialog):
 
         self.last_stashed_layer = None
         self.hidden_uuids = []
+        self.camo_shape_uuids = []
 
         self.config_file = self.GetConfigFile()
         self.LoadConfig()
@@ -53,7 +54,7 @@ class PCBCamouflageDialog(wx.Dialog):
         return os.path.join(project_dir, f".{project_name}.pcb_camo.json")
 
     def LoadConfig(self):
-        """Load stored stashed state and hidden item UUIDs."""
+        """Load stored stashed state, hidden item UUIDs, and camo shape UUIDs."""
         if not self.config_file or not os.path.exists(self.config_file):
             return
         try:
@@ -61,16 +62,18 @@ class PCBCamouflageDialog(wx.Dialog):
                 data = json.load(f)
             self.hidden_uuids = data.get("hidden_uuids", [])
             self.last_stashed_layer = data.get("last_stashed_layer", None)
+            self.camo_shape_uuids = data.get("camo_shape_uuids", [])
         except Exception as e:
             print(f"[PCBCamouflage] Failed to load config: {e}")
 
     def SaveConfig(self):
-        """Save stashed state and hidden item UUIDs."""
+        """Save stashed state, hidden item UUIDs, and camo shape UUIDs."""
         if not self.config_file:
             return
         data = {
             "hidden_uuids": list(set(self.hidden_uuids)),
             "last_stashed_layer": self.last_stashed_layer,
+            "camo_shape_uuids": list(set(self.camo_shape_uuids)),
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -344,11 +347,12 @@ class PCBCamouflageDialog(wx.Dialog):
 
         # Clear existing camo if requested
         if self.chk_clear_existing.IsChecked():
-            self.camo_gen.remove_all_camo_shapes(side=side)
+            self.camo_gen.remove_all_camo_shapes(side=side, target_uuids=self.camo_shape_uuids)
+            self.camo_shape_uuids = []
 
         # Generate camo
         try:
-            count = self.camo_gen.generate_camouflage(
+            count, created_uuids = self.camo_gen.generate_camouflage(
                 side=side,
                 pattern_type=pattern_type,
                 scale_mm=scale_mm,
@@ -357,6 +361,9 @@ class PCBCamouflageDialog(wx.Dialog):
                 board_margin_mm=margin_mm,
                 seed=seed,
             )
+            self.camo_shape_uuids.extend(created_uuids)
+            self.SaveConfig()
+
             msg = f"Successfully generated {count} camouflage shapes on {side}.Silkscreen!"
             self.lbl_status.SetLabel(msg)
             self.UpdateStashStatus()
@@ -368,7 +375,9 @@ class PCBCamouflageDialog(wx.Dialog):
         self.board = pcbnew.GetBoard()
         self.camo_gen = CamoGenerator(self.board)
         side = "F" if self.choice_side.GetSelection() == 0 else "B"
-        removed = self.camo_gen.remove_all_camo_shapes(side=side)
+        removed = self.camo_gen.remove_all_camo_shapes(side=side, target_uuids=self.camo_shape_uuids)
+        self.camo_shape_uuids = []
+        self.SaveConfig()
         self.lbl_status.SetLabel(f"Removed {removed} camouflage shapes from {side}.Silkscreen.")
 
     def OnStashSilkscreen(self, event):
