@@ -79,7 +79,7 @@ class CamoGenerator:
                     # Get effective shape polygon
                     try:
                         pad_poly = pad.GetEffectivePolygon()
-                        keepout.BooleanAdd(pad_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
+                        keepout.BooleanAdd(pad_poly)
                     except Exception:
                         # Fallback: create bounding box polygon
                         p_bbox = pad.GetBoundingBox()
@@ -90,7 +90,7 @@ class CamoGenerator:
                             pcbnew.VECTOR2I(p_bbox.GetRight(), p_bbox.GetBottom()),
                             pcbnew.VECTOR2I(p_bbox.GetX(), p_bbox.GetBottom())
                         ]))
-                        keepout.BooleanAdd(rect_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
+                        keepout.BooleanAdd(rect_poly)
 
         # Inflate all pads by clearance
         if clearance_nm > 0 and keepout.OutlineCount() > 0:
@@ -160,7 +160,7 @@ class CamoGenerator:
                     polygon_pts = points_outer + list(reversed(points_inner))
                     outline = pcbnew.SHAPE_POLY_SET()
                     outline.AddOutline(make_line_chain(polygon_pts))
-                    poly_set.BooleanAdd(outline, pcbnew.SHAPE_POLY_SET.PM_FAST)
+                    poly_set.BooleanAdd(outline)
 
         return poly_set
 
@@ -235,9 +235,9 @@ class CamoGenerator:
                         (bx0, by1)
                     ]))
 
-                    strip_poly.BooleanIntersection(cell_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
+                    strip_poly.BooleanIntersection(cell_poly)
                     if strip_poly.OutlineCount() > 0:
-                        poly_set.BooleanAdd(strip_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
+                        poly_set.BooleanAdd(strip_poly)
 
         return poly_set
 
@@ -281,7 +281,7 @@ class CamoGenerator:
             strip_pts = pts_top + list(reversed(pts_bot))
             outline = pcbnew.SHAPE_POLY_SET()
             outline.AddOutline(make_line_chain(strip_pts))
-            poly_set.BooleanAdd(outline, pcbnew.SHAPE_POLY_SET.PM_FAST)
+            poly_set.BooleanAdd(outline)
 
         return poly_set
 
@@ -313,12 +313,12 @@ class CamoGenerator:
             (x_max, y_max),
             (x_min, y_max)
         ]))
-        camo_poly.BooleanIntersection(board_box, pcbnew.SHAPE_POLY_SET.PM_FAST)
+        camo_poly.BooleanIntersection(board_box)
 
         # 3. Build pad keepout and subtract
         keepout = self.build_pad_keepout_polyset(side=side, clearance_mm=pad_clearance_mm)
         if keepout.OutlineCount() > 0:
-            camo_poly.BooleanSubtract(keepout, pcbnew.SHAPE_POLY_SET.PM_FAST)
+            camo_poly.BooleanSubtract(keepout)
 
         # 4. Add resulting polygons to board as PCB_SHAPE
         target_layer = LAYER_F_SILK if side == "F" else LAYER_B_SILK
