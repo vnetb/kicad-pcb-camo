@@ -16,6 +16,23 @@ LAYER_B_SILK = getattr(pcbnew, "B_SilkS", getattr(pcbnew, "B_Silkscreen", 36))
 CAMO_SHAPE_MARKER = "CAMO_SILK_PLUGIN"
 
 
+def make_line_chain(points):
+    """
+    Create a closed SHAPE_LINE_CHAIN from a list of (x, y) tuples or VECTOR2I points.
+    Accepts floats in mm or VECTOR2I objects in internal units.
+    """
+    chain = pcbnew.SHAPE_LINE_CHAIN()
+    for pt in points:
+        if isinstance(pt, pcbnew.VECTOR2I):
+            chain.Append(pt)
+        elif hasattr(pt, "x") and hasattr(pt, "y"):
+            chain.Append(pcbnew.VECTOR2I(int(pt.x), int(pt.y)))
+        else:
+            chain.Append(pcbnew.VECTOR2I(int(pt[0] * 1e6), int(pt[1] * 1e6)))
+    chain.SetClosed(True)
+    return chain
+
+
 class CamoGenerator:
     """Generates silkscreen camouflage patterns with automatic pad avoidance."""
 
@@ -62,17 +79,17 @@ class CamoGenerator:
                     # Get effective shape polygon
                     try:
                         pad_poly = pad.GetEffectivePolygon()
-                        keepout.AddPolygon(pad_poly)
+                        keepout.BooleanAdd(pad_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
                     except Exception:
                         # Fallback: create bounding box polygon
                         p_bbox = pad.GetBoundingBox()
                         rect_poly = pcbnew.SHAPE_POLY_SET()
-                        rect_poly.AddOutline([
+                        rect_poly.AddOutline(make_line_chain([
                             pcbnew.VECTOR2I(p_bbox.GetX(), p_bbox.GetY()),
                             pcbnew.VECTOR2I(p_bbox.GetRight(), p_bbox.GetY()),
                             pcbnew.VECTOR2I(p_bbox.GetRight(), p_bbox.GetBottom()),
                             pcbnew.VECTOR2I(p_bbox.GetX(), p_bbox.GetBottom())
-                        ])
+                        ]))
                         keepout.BooleanAdd(rect_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
 
         # Inflate all pads by clearance
@@ -141,12 +158,8 @@ class CamoGenerator:
                 if len(points_outer) >= 3:
                     # Form closed ribbon polygon
                     polygon_pts = points_outer + list(reversed(points_inner))
-                    v2i_pts = [
-                        pcbnew.VECTOR2I(int(px * 1e6), int(py * 1e6))
-                        for px, py in polygon_pts
-                    ]
                     outline = pcbnew.SHAPE_POLY_SET()
-                    outline.AddOutline(v2i_pts)
+                    outline.AddOutline(make_line_chain(polygon_pts))
                     poly_set.BooleanAdd(outline, pcbnew.SHAPE_POLY_SET.PM_FAST)
 
         return poly_set
@@ -210,22 +223,17 @@ class CamoGenerator:
                         (p1x + half * nx, p1y + half * ny)
                     ]
 
-                    # Clip points roughly to bounding box
-                    v2i_pts = [
-                        pcbnew.VECTOR2I(int(px * 1e6), int(py * 1e6))
-                        for px, py in strip_pts
-                    ]
                     strip_poly = pcbnew.SHAPE_POLY_SET()
-                    strip_poly.AddOutline(v2i_pts)
+                    strip_poly.AddOutline(make_line_chain(strip_pts))
 
                     # Intersect with cell box
                     cell_poly = pcbnew.SHAPE_POLY_SET()
-                    cell_poly.AddOutline([
-                        pcbnew.VECTOR2I(int(bx0 * 1e6), int(by0 * 1e6)),
-                        pcbnew.VECTOR2I(int(bx1 * 1e6), int(by0 * 1e6)),
-                        pcbnew.VECTOR2I(int(bx1 * 1e6), int(by1 * 1e6)),
-                        pcbnew.VECTOR2I(int(bx0 * 1e6), int(by1 * 1e6))
-                    ])
+                    cell_poly.AddOutline(make_line_chain([
+                        (bx0, by0),
+                        (bx1, by0),
+                        (bx1, by1),
+                        (bx0, by1)
+                    ]))
 
                     strip_poly.BooleanIntersection(cell_poly, pcbnew.SHAPE_POLY_SET.PM_FAST)
                     if strip_poly.OutlineCount() > 0:
@@ -271,12 +279,8 @@ class CamoGenerator:
                 pts_bot.append((x, my + half_w))
 
             strip_pts = pts_top + list(reversed(pts_bot))
-            v2i_pts = [
-                pcbnew.VECTOR2I(int(px * 1e6), int(py * 1e6))
-                for px, py in strip_pts
-            ]
             outline = pcbnew.SHAPE_POLY_SET()
-            outline.AddOutline(v2i_pts)
+            outline.AddOutline(make_line_chain(strip_pts))
             poly_set.BooleanAdd(outline, pcbnew.SHAPE_POLY_SET.PM_FAST)
 
         return poly_set
@@ -303,12 +307,12 @@ class CamoGenerator:
         # 2. Clip with board boundary box
         x_min, y_min, x_max, y_max = bounds
         board_box = pcbnew.SHAPE_POLY_SET()
-        board_box.AddOutline([
-            pcbnew.VECTOR2I(int(x_min * 1e6), int(y_min * 1e6)),
-            pcbnew.VECTOR2I(int(x_max * 1e6), int(y_min * 1e6)),
-            pcbnew.VECTOR2I(int(x_max * 1e6), int(y_max * 1e6)),
-            pcbnew.VECTOR2I(int(x_min * 1e6), int(y_max * 1e6))
-        ])
+        board_box.AddOutline(make_line_chain([
+            (x_min, y_min),
+            (x_max, y_min),
+            (x_max, y_max),
+            (x_min, y_max)
+        ]))
         camo_poly.BooleanIntersection(board_box, pcbnew.SHAPE_POLY_SET.PM_FAST)
 
         # 3. Build pad keepout and subtract
