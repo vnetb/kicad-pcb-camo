@@ -116,7 +116,10 @@ class CamoGenerator:
                     # Get effective shape polygon
                     try:
                         pad_poly = pad.GetEffectivePolygon()
-                        keepout.BooleanAdd(pad_poly)
+                        for oi in range(pad_poly.OutlineCount()):
+                            keepout.AddOutline(pad_poly.Outline(oi))
+                            for hi in range(pad_poly.HoleCount(oi)):
+                                keepout.AddHole(pad_poly.Hole(oi, hi))
                     except Exception:
                         # Fallback: create bounding box polygon
                         p_bbox = pad.GetBoundingBox()
@@ -127,13 +130,75 @@ class CamoGenerator:
                             pcbnew.VECTOR2I(p_bbox.GetRight(), p_bbox.GetBottom()),
                             pcbnew.VECTOR2I(p_bbox.GetX(), p_bbox.GetBottom())
                         ]))
-                        keepout.BooleanAdd(rect_poly)
+                        keepout.AddOutline(rect_poly.Outline(0))
+
+        # Simplify collected pad outlines
+        try:
+            keepout.Simplify()
+        except Exception:
+            pass
 
         # Inflate all pads by clearance
         if clearance_nm > 0 and keepout.OutlineCount() > 0:
             safe_inflate(keepout, clearance_nm)
 
         return keepout
+
+    def build_silk_keepout_polyset(self, side="F", clearance_mm=0.3):
+        """
+        Build a SHAPE_POLY_SET containing keepouts for existing silkscreen markings
+        (footprint polarity marks, pin 1 markers, diode cathode bars, icons, texts)
+        to prevent camouflage from drawing over them.
+        """
+        silk_keepout = pcbnew.SHAPE_POLY_SET()
+        target_layer = LAYER_F_SILK if side == "F" else LAYER_B_SILK
+        clearance_nm = int(clearance_mm * 1e6)
+
+        # 1. Footprint silkscreen graphical items (pin 1 dots, diode markings, outlines)
+        for fp in self.board.GetFootprints():
+            try:
+                for item in fp.GraphicalItems():
+                    if item.GetLayer() == target_layer:
+                        bbox = item.GetBoundingBox()
+                        if bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
+                            rect_poly = pcbnew.SHAPE_POLY_SET()
+                            rect_poly.AddOutline(make_line_chain([
+                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetY()),
+                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetY()),
+                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetBottom()),
+                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetBottom())
+                            ]))
+                            silk_keepout.AddOutline(rect_poly.Outline(0))
+            except Exception:
+                pass
+
+            # 2. Footprint visible silkscreen texts (pin names, polarity labels)
+            try:
+                for txt_item in (fp.Reference(), fp.Value()):
+                    if txt_item and txt_item.GetLayer() == target_layer and txt_item.IsVisible():
+                        bbox = txt_item.GetBoundingBox()
+                        if bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
+                            rect_poly = pcbnew.SHAPE_POLY_SET()
+                            rect_poly.AddOutline(make_line_chain([
+                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetY()),
+                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetY()),
+                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetBottom()),
+                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetBottom())
+                            ]))
+                            silk_keepout.AddOutline(rect_poly.Outline(0))
+            except Exception:
+                pass
+
+        # 3. Simplify and inflate by clearance
+        try:
+            silk_keepout.Simplify()
+        except Exception:
+            pass
+
+        if clearance_nm > 0 and silk_keepout.OutlineCount() > 0:
+            safe_inflate(silk_keepout, clearance_nm)
+
+        return silk_keepout
 
     def generate_swirl_polygons(self, bounds, scale_mm=10.0, line_width_mm=0.8, seed=42):
         """
@@ -386,8 +451,15 @@ class CamoGenerator:
         ]))
         camo_poly.BooleanIntersection(board_box)
 
-        # 4. Build pad keepout and subtract
+        # 4. Build pad & silkscreen keepout and subtract
         keepout = self.build_pad_keepout_polyset(side=side, clearance_mm=pad_clearance_mm)
+        silk_keepout = self.build_silk_keepout_polyset(side=side, clearance_mm=pad_clearance_mm)
+        if silk_keepout.OutlineCount() > 0:
+            for oi in range(silk_keepout.OutlineCount()):
+                keepout.AddOutline(silk_keepout.Outline(oi))
+                for hi in range(silk_keepout.HoleCount(oi)):
+                    keepout.AddHole(silk_keepout.Hole(oi, hi))
+
         if keepout.OutlineCount() > 0:
             camo_poly.BooleanSubtract(keepout)
 
