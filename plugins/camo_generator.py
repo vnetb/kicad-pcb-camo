@@ -159,16 +159,104 @@ class CamoGenerator:
             try:
                 for item in fp.GraphicalItems():
                     if item.GetLayer() == target_layer:
-                        bbox = item.GetBoundingBox()
-                        if bbox.GetWidth() > 0 and bbox.GetHeight() > 0:
-                            rect_poly = pcbnew.SHAPE_POLY_SET()
-                            rect_poly.AddOutline(make_line_chain([
-                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetY()),
-                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetY()),
-                                pcbnew.VECTOR2I(bbox.GetRight(), bbox.GetBottom()),
-                                pcbnew.VECTOR2I(bbox.GetX(), bbox.GetBottom())
-                            ]))
-                            silk_keepout.AddOutline(rect_poly.Outline(0))
+                        item_poly = pcbnew.SHAPE_POLY_SET()
+                        success = False
+
+                        # Try native TransformShapeToPolygon (extracts stroked lines, arcs, unfilled rects)
+                        try:
+                            item.TransformShapeToPolygon(item_poly, clearance_nm, 10000)
+                            if item_poly.OutlineCount() > 0:
+                                success = True
+                        except Exception:
+                            try:
+                                item.TransformShapeToPolygon(item_poly, clearance_nm)
+                                if item_poly.OutlineCount() > 0:
+                                    success = True
+                            except Exception:
+                                pass
+
+                        # Precise geometric fallback for line segments and circles
+                        if not success:
+                            try:
+                                shape_type = item.GetShape() if hasattr(item, "GetShape") else None
+                                if shape_type == pcbnew.SHAPE_T_SEGMENT:
+                                    p1 = item.GetStart()
+                                    p2 = item.GetEnd()
+                                    w = (item.GetWidth() or int(0.15 * 1e6)) + 2 * clearance_nm
+                                    dx = p2.x - p1.x
+                                    dy = p2.y - p1.y
+                                    dist = math.hypot(dx, dy)
+                                    if dist > 0:
+                                        half_w = w / 2.0
+                                        nx = -dy / dist * half_w
+                                        ny = dx / dist * half_w
+                                        ex = dx / dist * clearance_nm
+                                        ey = dy / dist * clearance_nm
+                                        seg_pts = [
+                                            pcbnew.VECTOR2I(int(p1.x - ex + nx), int(p1.y - ey + ny)),
+                                            pcbnew.VECTOR2I(int(p2.x + ex + nx), int(p2.y + ey + ny)),
+                                            pcbnew.VECTOR2I(int(p2.x + ex - nx), int(p2.y + ey - ny)),
+                                            pcbnew.VECTOR2I(int(p1.x - ex - nx), int(p1.y - ey - ny)),
+                                        ]
+                                        item_poly.AddOutline(make_line_chain(seg_pts))
+                                        success = True
+                                elif shape_type == pcbnew.SHAPE_T_CIRCLE:
+                                    center = item.GetCenter()
+                                    r = (item.GetRadius() if hasattr(item, "GetRadius") else 0) + clearance_nm
+                                    if r > 0:
+                                        circ_pts = []
+                                        for a_idx in range(16):
+                                            ang = 2.0 * math.pi * a_idx / 16.0
+                                            circ_pts.append(pcbnew.VECTOR2I(
+                                                int(center.x + r * math.cos(ang)),
+                                                int(center.y + r * math.sin(ang))
+                                            ))
+                                        item_poly.AddOutline(make_line_chain(circ_pts))
+                                        success = True
+                                elif shape_type == pcbnew.SHAPE_T_POLY or hasattr(item, "GetPolyShape"):
+                                    # 1-pin triangles (▶), arrows, custom silk polygon markings
+                                    poly = item.GetPolyShape()
+                                    if poly and poly.OutlineCount() > 0:
+                                        copy_poly = pcbnew.SHAPE_POLY_SET(poly)
+                                        safe_inflate(copy_poly, clearance_nm)
+                                        for oi in range(copy_poly.OutlineCount()):
+                                            item_poly.AddOutline(copy_poly.Outline(oi))
+                                            for hi in range(copy_poly.HoleCount(oi)):
+                                                item_poly.AddHole(copy_poly.Hole(oi, hi))
+                                        success = True
+                                elif shape_type == pcbnew.SHAPE_T_ARC:
+                                    try:
+                                        arc_poly = pcbnew.SHAPE_POLY_SET()
+                                        item.TransformShapeToPolygon(arc_poly, clearance_nm, 10000)
+                                        if arc_poly.OutlineCount() > 0:
+                                            for oi in range(arc_poly.OutlineCount()):
+                                                item_poly.AddOutline(arc_poly.Outline(oi))
+                                            success = True
+                                    except Exception:
+                                        pass
+
+                                # Small mark fallback (< 3mm) to guarantee protection of any unknown tiny symbols
+                                if not success:
+                                    bbox = item.GetBoundingBox()
+                                    w_mm = bbox.GetWidth() / 1e6
+                                    h_mm = bbox.GetHeight() / 1e6
+                                    if 0 < w_mm < 3.0 and 0 < h_mm < 3.0:
+                                        rect_pts = [
+                                            pcbnew.VECTOR2I(bbox.GetX() - clearance_nm, bbox.GetY() - clearance_nm),
+                                            pcbnew.VECTOR2I(bbox.GetRight() + clearance_nm, bbox.GetY() - clearance_nm),
+                                            pcbnew.VECTOR2I(bbox.GetRight() + clearance_nm, bbox.GetBottom() + clearance_nm),
+                                            pcbnew.VECTOR2I(bbox.GetX() - clearance_nm, bbox.GetBottom() + clearance_nm),
+                                        ]
+                                        item_poly.AddOutline(make_line_chain(rect_pts))
+                                        success = True
+                            except Exception:
+                                pass
+
+                        if success:
+                            for oi in range(item_poly.OutlineCount()):
+                                silk_keepout.AddOutline(item_poly.Outline(oi))
+                                for hi in range(item_poly.HoleCount(oi)):
+                                    silk_keepout.AddHole(item_poly.Hole(oi, hi))
             except Exception:
                 pass
 
@@ -189,14 +277,11 @@ class CamoGenerator:
             except Exception:
                 pass
 
-        # 3. Simplify and inflate by clearance
+        # 3. Simplify collected silk keepout outlines
         try:
             silk_keepout.Simplify()
         except Exception:
             pass
-
-        if clearance_nm > 0 and silk_keepout.OutlineCount() > 0:
-            safe_inflate(silk_keepout, clearance_nm)
 
         return silk_keepout
 
