@@ -8,6 +8,8 @@ Provides two tabs:
 import wx
 import pcbnew
 import random
+import os
+import json
 from .camo_generator import CamoGenerator
 from .silk_stash import (
     SilkStashManager,
@@ -32,9 +34,53 @@ class PCBCamouflageDialog(wx.Dialog):
         self.stash_mgr = SilkStashManager(self.board)
 
         self.last_stashed_layer = None
+        self.hidden_uuids = []
+
+        self.config_file = self.GetConfigFile()
+        self.LoadConfig()
 
         self.InitUI()
         self.Center()
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+
+    def GetConfigFile(self):
+        """Get path to project-specific camouflage config file."""
+        board_path = self.board.GetFileName()
+        if not board_path:
+            return None
+        project_dir = os.path.dirname(board_path)
+        project_name = os.path.splitext(os.path.basename(board_path))[0]
+        return os.path.join(project_dir, f".{project_name}.pcb_camo.json")
+
+    def LoadConfig(self):
+        """Load stored stashed state and hidden item UUIDs."""
+        if not self.config_file or not os.path.exists(self.config_file):
+            return
+        try:
+            with open(self.config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.hidden_uuids = data.get("hidden_uuids", [])
+            self.last_stashed_layer = data.get("last_stashed_layer", None)
+        except Exception as e:
+            print(f"[PCBCamouflage] Failed to load config: {e}")
+
+    def SaveConfig(self):
+        """Save stashed state and hidden item UUIDs."""
+        if not self.config_file:
+            return
+        data = {
+            "hidden_uuids": list(set(self.hidden_uuids)),
+            "last_stashed_layer": self.last_stashed_layer,
+        }
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[PCBCamouflage] Failed to save config: {e}")
+
+    def OnClose(self, event):
+        self.SaveConfig()
+        event.Skip()
 
     def InitUI(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -291,6 +337,8 @@ class PCBCamouflageDialog(wx.Dialog):
             try:
                 res = self.stash_mgr.stash_silkscreen(side=side)
                 self.last_stashed_layer = res["target_layer_id"]
+                self.hidden_uuids.extend(res.get("hidden_uuids", []))
+                self.SaveConfig()
             except Exception as e:
                 wx.MessageBox(f"Failed to auto-stash silkscreen: {e}", "Stash Error", wx.ICON_WARNING)
 
@@ -334,6 +382,9 @@ class PCBCamouflageDialog(wx.Dialog):
         try:
             res = self.stash_mgr.stash_silkscreen(side=side, target_layer_id=target_layer_id)
             self.last_stashed_layer = res["target_layer_id"]
+            self.hidden_uuids.extend(res.get("hidden_uuids", []))
+            self.SaveConfig()
+
             self.lbl_status.SetLabel(
                 f"Stashed {res['count']} items from {side}.Silkscreen into {res['target_layer_name']}."
             )
@@ -350,12 +401,15 @@ class PCBCamouflageDialog(wx.Dialog):
         sel_idx = self.choice_target_layer.GetSelection()
         source_layer_id = self.layer_id_map[sel_idx] if sel_idx >= 0 else self.last_stashed_layer
 
-        if source_layer_id is None:
-            wx.MessageBox("Please select a layer to restore items from.", "Error", wx.ICON_WARNING)
-            return
-
         try:
-            count = self.stash_mgr.restore_silkscreen(source_layer_id=source_layer_id, target_side=side)
+            count = self.stash_mgr.restore_silkscreen(
+                source_layer_id=source_layer_id,
+                target_side=side,
+                hidden_uuids=self.hidden_uuids,
+            )
+            self.hidden_uuids = []
+            self.SaveConfig()
+
             self.lbl_status.SetLabel(f"Restored {count} items back to {side}.Silkscreen.")
             self.UpdateStashStatus()
             self.RefreshUserLayerChoices()

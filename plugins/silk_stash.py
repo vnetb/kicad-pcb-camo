@@ -11,6 +11,16 @@ import pcbnew
 LAYER_F_SILK = getattr(pcbnew, "F_SilkS", getattr(pcbnew, "F_Silkscreen", 37))
 LAYER_B_SILK = getattr(pcbnew, "B_SilkS", getattr(pcbnew, "B_Silkscreen", 36))
 
+
+def get_item_uuid(item):
+    """Safely get string representation of UUID from a KiCad board item."""
+    if hasattr(item, "m_Uuid"):
+        return item.m_Uuid.AsString()
+    elif hasattr(item, "GetUuid"):
+        return item.GetUuid().AsString()
+    return ""
+
+
 # User layers in KiCad (User.9 down to User.1)
 # In KiCad 7/8/9, User_1 to User_9 have corresponding layer IDs.
 def get_user_layer_candidates():
@@ -123,20 +133,24 @@ class SilkStashManager:
             pass
 
         count = 0
+        hidden_uuids = []
 
-        # 1. Stash board-level drawings (PCB_SHAPE, PCB_TEXT)
+        # 1. Stash board-level drawings (PCB_SHAPE, PCB_TEXT) to user layer
         for drawing in self.board.GetDrawings():
             if drawing.GetLayer() in silk_layers:
                 drawing.SetLayer(target_layer_id)
                 count += 1
 
-        # 2. Stash footprint-level elements
+        # 2. Hide footprint-level Reference and Value (keeps layer intact to prevent DRC errors)
         for fp in self.board.GetFootprints():
             # Reference
             try:
                 ref = fp.Reference()
-                if ref and ref.GetLayer() in silk_layers:
-                    ref.SetLayer(target_layer_id)
+                if ref and ref.GetLayer() in silk_layers and ref.IsVisible():
+                    uid = get_item_uuid(ref)
+                    if uid:
+                        hidden_uuids.append(uid)
+                    ref.SetVisible(False)
                     count += 1
             except Exception:
                 pass
@@ -144,18 +158,12 @@ class SilkStashManager:
             # Value
             try:
                 val = fp.Value()
-                if val and val.GetLayer() in silk_layers:
-                    val.SetLayer(target_layer_id)
+                if val and val.GetLayer() in silk_layers and val.IsVisible():
+                    uid = get_item_uuid(val)
+                    if uid:
+                        hidden_uuids.append(uid)
+                    val.SetVisible(False)
                     count += 1
-            except Exception:
-                pass
-
-            # Footprint graphical items / shapes
-            try:
-                for item in fp.GraphicalItems():
-                    if item.GetLayer() in silk_layers:
-                        item.SetLayer(target_layer_id)
-                        count += 1
             except Exception:
                 pass
 
@@ -166,46 +174,64 @@ class SilkStashManager:
             "count": count,
             "target_layer_id": target_layer_id,
             "target_layer_name": custom_name or orig_name,
+            "hidden_uuids": hidden_uuids,
         }
 
-    def restore_silkscreen(self, source_layer_id, target_side="F"):
+    def restore_silkscreen(self, source_layer_id, target_side="F", hidden_uuids=None):
         """
-        Restore items from a stashed layer back to their original silkscreen layer.
+        Restore items from a stashed layer back to their original silkscreen layer,
+        and unhide only previously hidden footprint text items.
         target_side: 'F' -> LAYER_F_SILK, 'B' -> LAYER_B_SILK
+        hidden_uuids: List or Set of UUID strings recorded when stashed
         Returns number of items restored.
         """
         target_layer = LAYER_F_SILK if target_side == "F" else LAYER_B_SILK
         count = 0
+        hidden_set = set(hidden_uuids or [])
 
-        # 1. Restore board-level drawings
-        for drawing in self.board.GetDrawings():
-            if drawing.GetLayer() == source_layer_id:
-                drawing.SetLayer(target_layer)
-                count += 1
+        # 1. Restore board-level drawings from user layer
+        if source_layer_id is not None:
+            for drawing in self.board.GetDrawings():
+                if drawing.GetLayer() == source_layer_id:
+                    drawing.SetLayer(target_layer)
+                    count += 1
 
-        # 2. Restore footprint elements
+        # 2. Restore footprint references & values (only those that were previously visible)
         for fp in self.board.GetFootprints():
+            # Restore visibility for recorded references
             try:
                 ref = fp.Reference()
-                if ref and ref.GetLayer() == source_layer_id:
-                    ref.SetLayer(target_layer)
-                    count += 1
+                if ref:
+                    uid = get_item_uuid(ref)
+                    # If recorded in hidden_set, or fallback if layer was moved previously
+                    if uid in hidden_set or (source_layer_id and ref.GetLayer() == source_layer_id):
+                        ref.SetVisible(True)
+                        if source_layer_id and ref.GetLayer() == source_layer_id:
+                            ref.SetLayer(target_layer)
+                        count += 1
             except Exception:
                 pass
 
+            # Restore visibility for recorded values
             try:
                 val = fp.Value()
-                if val and val.GetLayer() == source_layer_id:
-                    val.SetLayer(target_layer)
-                    count += 1
+                if val:
+                    uid = get_item_uuid(val)
+                    if uid in hidden_set or (source_layer_id and val.GetLayer() == source_layer_id):
+                        val.SetVisible(True)
+                        if source_layer_id and val.GetLayer() == source_layer_id:
+                            val.SetLayer(target_layer)
+                        count += 1
             except Exception:
                 pass
 
+            # Fallback for footprint graphical items if previously moved
             try:
-                for item in fp.GraphicalItems():
-                    if item.GetLayer() == source_layer_id:
-                        item.SetLayer(target_layer)
-                        count += 1
+                if source_layer_id is not None:
+                    for item in fp.GraphicalItems():
+                        if item.GetLayer() == source_layer_id:
+                            item.SetLayer(target_layer)
+                            count += 1
             except Exception:
                 pass
 
