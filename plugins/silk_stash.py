@@ -188,6 +188,8 @@ class SilkStashManager:
         target_layer = LAYER_F_SILK if target_side == "F" else LAYER_B_SILK
         count = 0
         hidden_set = set(hidden_uuids or [])
+        # If no specific UUIDs were recorded, unhide all hidden items on target silkscreen layer
+        restore_all_if_empty = len(hidden_set) == 0
 
         # 1. Restore board-level drawings from user layer
         if source_layer_id is not None:
@@ -196,32 +198,35 @@ class SilkStashManager:
                     drawing.SetLayer(target_layer)
                     count += 1
 
-        # 2. Restore footprint references & values (only those that were previously visible)
+        # 2. Restore footprint references & values
         for fp in self.board.GetFootprints():
-            # Restore visibility for recorded references
+            # Restore visibility for references
             try:
                 ref = fp.Reference()
-                if ref:
+                if ref and ref.GetLayer() == target_layer:
                     uid = get_item_uuid(ref)
-                    # If recorded in hidden_set, or fallback if layer was moved previously
-                    if uid in hidden_set or (source_layer_id and ref.GetLayer() == source_layer_id):
-                        ref.SetVisible(True)
+                    should_restore = (uid in hidden_set) or (restore_all_if_empty and not ref.IsVisible())
+                    if should_restore or (source_layer_id and ref.GetLayer() == source_layer_id):
+                        if not ref.IsVisible():
+                            ref.SetVisible(True)
+                            count += 1
                         if source_layer_id and ref.GetLayer() == source_layer_id:
                             ref.SetLayer(target_layer)
-                        count += 1
             except Exception:
                 pass
 
-            # Restore visibility for recorded values
+            # Restore visibility for values
             try:
                 val = fp.Value()
-                if val:
+                if val and val.GetLayer() == target_layer:
                     uid = get_item_uuid(val)
-                    if uid in hidden_set or (source_layer_id and val.GetLayer() == source_layer_id):
-                        val.SetVisible(True)
+                    should_restore = (uid in hidden_set) or (restore_all_if_empty and not val.IsVisible())
+                    if should_restore or (source_layer_id and val.GetLayer() == source_layer_id):
+                        if not val.IsVisible():
+                            val.SetVisible(True)
+                            count += 1
                         if source_layer_id and val.GetLayer() == source_layer_id:
                             val.SetLayer(target_layer)
-                        count += 1
             except Exception:
                 pass
 

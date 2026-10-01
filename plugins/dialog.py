@@ -15,6 +15,7 @@ from .silk_stash import (
     SilkStashManager,
     find_unused_user_layer,
     get_user_layer_candidates,
+    get_item_uuid,
     LAYER_F_SILK,
     LAYER_B_SILK,
 )
@@ -63,8 +64,43 @@ class PCBCamouflageDialog(wx.Dialog):
             self.hidden_uuids = data.get("hidden_uuids", [])
             self.last_stashed_layer = data.get("last_stashed_layer", None)
             self.camo_shape_uuids = data.get("camo_shape_uuids", [])
+            self.VerifyAndSanitizeStashState()
         except Exception as e:
             print(f"[PCBCamouflage] Failed to load config: {e}")
+
+    def VerifyAndSanitizeStashState(self):
+        """
+        Verify whether recorded hidden items are actually hidden on the current board.
+        If the user closed KiCad without saving, the board items were restored to visible
+        while the external JSON retained stale hidden_uuids.
+        Automatically cleans up the stale state so the user can stash cleanly.
+        """
+        if not self.hidden_uuids:
+            return
+
+        hidden_set = set(self.hidden_uuids)
+        actually_hidden = 0
+        actually_visible = 0
+
+        for fp in self.board.GetFootprints():
+            for text_item in (fp.Reference(), fp.Value()):
+                if text_item:
+                    uid = get_item_uuid(text_item)
+                    if uid in hidden_set:
+                        if text_item.IsVisible():
+                            actually_visible += 1
+                        else:
+                            actually_hidden += 1
+
+        # If recorded items are actually visible on the board, stale state detected
+        if actually_visible > actually_hidden:
+            print(
+                f"[PCBCamouflage] Stale stash state detected ({actually_visible} items visible vs {actually_hidden} hidden). "
+                "Board was likely reloaded without saving. Resetting stashed state."
+            )
+            self.hidden_uuids = []
+            self.last_stashed_layer = None
+            self.SaveConfig()
 
     def SaveConfig(self):
         """Save stashed state, hidden item UUIDs, and camo shape UUIDs."""
@@ -111,26 +147,42 @@ class PCBCamouflageDialog(wx.Dialog):
     # -------------------------------------------------------------
     # Tab 1: Camouflage
     # -------------------------------------------------------------
+    # -------------------------------------------------------------
+    # Tab 1: Camouflage (Step-by-Step Layering Workflow)
+    # -------------------------------------------------------------
     def BuildCamoTab(self, panel):
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Header description
-        desc_box = wx.StaticBoxSizer(wx.StaticBox(panel, wx.ID_ANY, "Overview"), wx.VERTICAL)
-        desc = wx.StaticText(
+        # --- Step 1: Silkscreen Stash & Protect ---
+        step1_box = wx.StaticBoxSizer(wx.StaticBox(panel, wx.ID_ANY, "Step 1: Existing Silkscreen Stash & Protect"), wx.VERTICAL)
+        step1_desc = wx.StaticText(
             panel,
-            label="Generate automotive prototype-style dazzle / swirl camouflage\n"
-                  "on silkscreen layers while automatically clipping away component pads.",
+            label="Hide component references (R1, C1, etc.) and stash board silkscreen\n"
+                  "so they don't clash with camouflage. Recorded once and protected from overwrite.",
         )
-        desc_box.Add(desc, 0, wx.ALL, 5)
-        sizer.Add(desc_box, 0, wx.EXPAND | wx.ALL, 6)
+        step1_box.Add(step1_desc, 0, wx.ALL, 4)
 
-        # Settings
-        settings_box = wx.StaticBoxSizer(wx.StaticBox(panel, wx.ID_ANY, "Camouflage Settings"), wx.VERTICAL)
-        grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=12)
+        step1_btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_step1_stash = wx.Button(panel, label="1. Stash Silkscreen (Hide R1/C1)", size=(-1, 32))
+        self.btn_step1_stash.Bind(wx.EVT_BUTTON, self.OnStashSilkscreen)
+        self.btn_step4_restore = wx.Button(panel, label="4. Restore Silkscreen (Revert All)", size=(-1, 32))
+        self.btn_step4_restore.Bind(wx.EVT_BUTTON, self.OnRestoreSilkscreen)
+
+        step1_btn_sizer.Add(self.btn_step1_stash, 1, wx.EXPAND | wx.RIGHT, 6)
+        step1_btn_sizer.Add(self.btn_step4_restore, 1, wx.EXPAND)
+        step1_box.Add(step1_btn_sizer, 0, wx.EXPAND | wx.ALL, 4)
+
+        self.lbl_step1_status = wx.StaticText(panel, label="Silkscreen status: Normal (not stashed)")
+        step1_box.Add(self.lbl_step1_status, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        sizer.Add(step1_box, 0, wx.EXPAND | wx.ALL, 6)
+
+        # --- Step 2: Camouflage Pattern & Layering ---
+        settings_box = wx.StaticBoxSizer(wx.StaticBox(panel, wx.ID_ANY, "Step 2: Generate & Layer Camouflage Pattern"), wx.VERTICAL)
+        grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=10)
         grid.AddGrowableCol(1)
 
         # Target side
-        grid.Add(wx.StaticText(panel, label="Target Silkscreen Layer:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(wx.StaticText(panel, label="Target Layer:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.choice_side = wx.Choice(panel, choices=["Front (F.Silkscreen)", "Back (B.Silkscreen)"])
         self.choice_side.SetSelection(0)
         grid.Add(self.choice_side, 0, wx.EXPAND)
@@ -159,7 +211,7 @@ class PCBCamouflageDialog(wx.Dialog):
         grid.Add(self.txt_line_w, 0, wx.EXPAND)
 
         # Pad Clearance
-        grid.Add(wx.StaticText(panel, label="Pad Avoidance Clearance (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
+        grid.Add(wx.StaticText(panel, label="Pad Clearance (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.txt_pad_clearance = wx.TextCtrl(panel, value="0.4")
         grid.Add(self.txt_pad_clearance, 0, wx.EXPAND)
 
@@ -172,41 +224,35 @@ class PCBCamouflageDialog(wx.Dialog):
         grid.Add(wx.StaticText(panel, label="Random Seed:"), 0, wx.ALIGN_CENTER_VERTICAL)
         seed_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.txt_seed = wx.TextCtrl(panel, value="42")
-        btn_rand_seed = wx.Button(panel, label="Randomize", size=(90, -1))
+        btn_rand_seed = wx.Button(panel, label="New Seed", size=(80, -1))
         btn_rand_seed.Bind(wx.EVT_BUTTON, self.OnRandomSeed)
         seed_sizer.Add(self.txt_seed, 1, wx.EXPAND | wx.RIGHT, 4)
         seed_sizer.Add(btn_rand_seed, 0)
         grid.Add(seed_sizer, 0, wx.EXPAND)
 
-        settings_box.Add(grid, 1, wx.EXPAND | wx.ALL, 6)
+        settings_box.Add(grid, 0, wx.EXPAND | wx.ALL, 4)
 
-        # Options
-        self.chk_auto_stash = wx.CheckBox(
-            panel, label="Automatically stash existing silkscreen before generating"
-        )
-        self.chk_auto_stash.SetValue(True)
-        settings_box.Add(self.chk_auto_stash, 0, wx.ALL, 6)
-
+        # Layering Option (Default False: Add onto existing)
         self.chk_clear_existing = wx.CheckBox(
-            panel, label="Remove existing camouflage before generating new pattern"
+            panel, label="Clear existing camouflage before generating (Replace mode)"
         )
-        self.chk_clear_existing.SetValue(True)
-        settings_box.Add(self.chk_clear_existing, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        self.chk_clear_existing.SetValue(False)
+        settings_box.Add(self.chk_clear_existing, 0, wx.ALL, 4)
 
         sizer.Add(settings_box, 1, wx.EXPAND | wx.ALL, 6)
 
-        # Action Buttons
+        # Action Buttons (Step 2: Add Camo Layer / Step 3: Clear Camo)
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_generate = wx.Button(panel, label="Generate Camouflage", size=(-1, 36))
+        self.btn_generate = wx.Button(panel, label="2. Add Camo Layer (重ね掛け)", size=(-1, 38))
         self.btn_generate.SetBackgroundColour(wx.Colour(50, 150, 250))
         self.btn_generate.SetForegroundColour(wx.Colour(255, 255, 255))
         self.btn_generate.Bind(wx.EVT_BUTTON, self.OnGenerateCamo)
 
-        self.btn_remove_camo = wx.Button(panel, label="Remove Camouflage", size=(-1, 36))
-        self.btn_remove_camo.Bind(wx.EVT_BUTTON, self.OnRemoveCamo)
+        self.btn_clear_camo = wx.Button(panel, label="3. Clear Camo (迷彩のみ全消去)", size=(-1, 38))
+        self.btn_clear_camo.Bind(wx.EVT_BUTTON, self.OnClearCamoOnly)
 
         btn_sizer.Add(self.btn_generate, 2, wx.EXPAND | wx.RIGHT, 6)
-        btn_sizer.Add(self.btn_remove_camo, 1, wx.EXPAND)
+        btn_sizer.Add(self.btn_clear_camo, 1, wx.EXPAND)
         sizer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 6)
 
         panel.SetSizer(sizer)
@@ -314,6 +360,16 @@ class PCBCamouflageDialog(wx.Dialog):
         text = f"Current Silkscreen: F.Silkscreen ({f_count} items), B.Silkscreen ({b_count} items)"
         self.lbl_stash_info.SetLabel(text)
 
+        if hasattr(self, "lbl_step1_status"):
+            if self.hidden_uuids or self.last_stashed_layer is not None:
+                cnt = len(self.hidden_uuids)
+                self.lbl_step1_status.SetLabel(f"Silkscreen status: STASHED & PROTECTED ({cnt} items hidden)")
+                self.lbl_step1_status.SetForegroundColour(wx.Colour(0, 140, 60))
+            else:
+                self.lbl_step1_status.SetLabel("Silkscreen status: Normal (displayed on PCB)")
+                self.lbl_step1_status.SetForegroundColour(wx.Colour(80, 80, 80))
+            self.lbl_step1_status.Refresh()
+
     def OnGenerateCamo(self, event):
         self.board = pcbnew.GetBoard()
         self.camo_gen = CamoGenerator(self.board)
@@ -335,22 +391,12 @@ class PCBCamouflageDialog(wx.Dialog):
             wx.MessageBox("Please enter valid numerical parameters.", "Input Error", wx.ICON_ERROR)
             return
 
-        # Auto stash existing silkscreen if requested
-        if self.chk_auto_stash.IsChecked():
-            try:
-                res = self.stash_mgr.stash_silkscreen(side=side)
-                self.last_stashed_layer = res["target_layer_id"]
-                self.hidden_uuids.extend(res.get("hidden_uuids", []))
-                self.SaveConfig()
-            except Exception as e:
-                wx.MessageBox(f"Failed to auto-stash silkscreen: {e}", "Stash Error", wx.ICON_WARNING)
-
-        # Clear existing camo if requested
+        # If clear existing requested, remove existing camo shapes before generating
         if self.chk_clear_existing.IsChecked():
             self.camo_gen.remove_all_camo_shapes(side=side, target_uuids=self.camo_shape_uuids)
             self.camo_shape_uuids = []
 
-        # Generate camo
+        # Generate camo layer
         try:
             count, created_uuids = self.camo_gen.generate_camouflage(
                 side=side,
@@ -364,34 +410,47 @@ class PCBCamouflageDialog(wx.Dialog):
             self.camo_shape_uuids.extend(created_uuids)
             self.SaveConfig()
 
-            msg = f"Successfully generated {count} camouflage shapes on {side}.Silkscreen!"
+            # Auto-advance seed for the next layer
+            self.txt_seed.SetValue(str(random.randint(1, 99999)))
+
+            total_camo = len(self.camo_shape_uuids)
+            msg = f"Layer added: +{count} shapes (Total camo: {total_camo} shapes on {side}.Silkscreen)"
             self.lbl_status.SetLabel(msg)
             self.UpdateStashStatus()
             self.RefreshUserLayerChoices()
         except Exception as e:
             wx.MessageBox(f"Error generating camouflage: {e}", "Generation Error", wx.ICON_ERROR)
 
-    def OnRemoveCamo(self, event):
+    def OnClearCamoOnly(self, event):
+        """Step 3: Remove only camouflage shapes without touching stashed silkscreen."""
         self.board = pcbnew.GetBoard()
         self.camo_gen = CamoGenerator(self.board)
         side = "F" if self.choice_side.GetSelection() == 0 else "B"
+
         removed = self.camo_gen.remove_all_camo_shapes(side=side, target_uuids=self.camo_shape_uuids)
         self.camo_shape_uuids = []
         self.SaveConfig()
-        self.lbl_status.SetLabel(f"Removed {removed} camouflage shapes from {side}.Silkscreen.")
+
+        self.lbl_status.SetLabel(f"Cleared {removed} camouflage shapes. Silkscreen remains stashed.")
 
     def OnStashSilkscreen(self, event):
+        """Step 1: Stash silkscreen. Hides visible references and stashes board graphics."""
         self.board = pcbnew.GetBoard()
         self.stash_mgr = SilkStashManager(self.board)
-        side = "F" if self.choice_stash_side.GetSelection() == 0 else "B"
+        side = "F" if self.choice_side.GetSelection() == 0 else "B"
 
-        sel_idx = self.choice_target_layer.GetSelection()
+        # Verify against actual board state (auto-clean if board was closed without saving)
+        self.VerifyAndSanitizeStashState()
+
+        sel_idx = self.choice_target_layer.GetSelection() if hasattr(self, "choice_target_layer") else -1
         target_layer_id = self.layer_id_map[sel_idx] if sel_idx >= 0 else None
 
         try:
             res = self.stash_mgr.stash_silkscreen(side=side, target_layer_id=target_layer_id)
             self.last_stashed_layer = res["target_layer_id"]
-            self.hidden_uuids.extend(res.get("hidden_uuids", []))
+            # Accumulate newly hidden UUIDs without losing existing ones
+            new_uids = set(self.hidden_uuids).union(res.get("hidden_uuids", []))
+            self.hidden_uuids = list(new_uids)
             self.SaveConfig()
 
             self.lbl_status.SetLabel(

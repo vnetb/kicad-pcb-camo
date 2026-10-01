@@ -138,6 +138,7 @@ class CamoGenerator:
     def generate_swirl_polygons(self, bounds, scale_mm=10.0, line_width_mm=0.8, seed=42):
         """
         Generate automotive test mule swirl (spiral / vortex) ribbon polygons.
+        Fully randomizes vortex center positions, starting rotation angles, pitch, and directions.
         """
         random.seed(seed)
         x_min, y_min, x_max, y_max = bounds
@@ -146,45 +147,53 @@ class CamoGenerator:
 
         poly_set = pcbnew.SHAPE_POLY_SET()
 
-        # Determine number of vortex centers based on scale
+        # Distribute vortex centers with random positions and density
+        area = max(1.0, width * height)
+        cell_area = max(4.0, scale_mm * scale_mm)
+        num_centers = max(2, int(area / cell_area) + random.randint(1, 3))
+
+        centers = []
+        # Mix jittered grid and scatter for natural organic distribution
         cols = max(1, int(width / scale_mm))
         rows = max(1, int(height / scale_mm))
-        centers = []
 
         for r in range(rows + 1):
             for c in range(cols + 1):
-                cx = x_min + (c + random.uniform(-0.3, 0.3)) * scale_mm
-                cy = y_min + (r + random.uniform(-0.3, 0.3)) * scale_mm
-                direction = 1 if (r + c) % 2 == 0 else -1
-                centers.append((cx, cy, direction))
+                # Generous jitter around cell to avoid rigid grid alignment
+                cx = x_min + (c + random.uniform(-0.6, 0.6)) * scale_mm
+                cy = y_min + (r + random.uniform(-0.6, 0.6)) * scale_mm
+                direction = random.choice([-1, 1])
+                rot_offset = random.uniform(0, 2.0 * math.pi)
+                pitch_mult = random.uniform(0.75, 1.25)
+                arm_count = random.choice([2, 3])
+                max_radius = scale_mm * random.uniform(1.2, 2.0)
+                centers.append((cx, cy, direction, rot_offset, pitch_mult, arm_count, max_radius))
 
         # Generate spiral arms from each center
-        half_w = line_width_mm / 2.0
-        max_r = scale_mm * 1.6
+        for cx, cy, direction, rot_offset, pitch_mult, num_arms, max_r in centers:
+            half_w = (line_width_mm * random.uniform(0.9, 1.1)) / 2.0
 
-        for cx, cy, direction in centers:
-            # 2 to 3 interleaved spiral arms
-            num_arms = 2
             for arm in range(num_arms):
-                base_angle = (2.0 * math.pi / num_arms) * arm
+                base_angle = rot_offset + (2.0 * math.pi / num_arms) * arm
                 points_outer = []
                 points_inner = []
 
                 # Trace spiral: r = b * theta
-                steps = 40
-                b = (scale_mm / 2.0) / (2.0 * math.pi)
-                for s in range(5, steps):
-                    theta = s * 0.15
+                b = ((scale_mm / 2.0) / (2.0 * math.pi)) * pitch_mult
+                steps = max(25, int(50 * (max_r / (scale_mm * 1.5))))
+
+                for s in range(4, steps):
+                    theta = s * 0.14
                     r = b * theta
                     if r > max_r:
                         break
 
                     angle = base_angle + direction * theta
-                    # Midline
+                    # Midline point
                     mx = cx + r * math.cos(angle)
                     my = cy + r * math.sin(angle)
 
-                    # Perpendicular vector for thickness
+                    # Perpendicular offset for ribbon thickness
                     perp_angle = angle + math.pi / 2.0
                     dx = half_w * math.cos(perp_angle)
                     dy = half_w * math.sin(perp_angle)
