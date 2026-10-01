@@ -37,6 +37,7 @@ class PCBCamouflageDialog(wx.Dialog):
         self.last_stashed_layer = None
         self.hidden_uuids = []
         self.camo_shape_uuids = []
+        self.saved_params = {}
 
         self.config_file = self.GetConfigFile()
         self.LoadConfig()
@@ -55,7 +56,7 @@ class PCBCamouflageDialog(wx.Dialog):
         return os.path.join(project_dir, f".{project_name}.pcb_camo.json")
 
     def LoadConfig(self):
-        """Load stored stashed state, hidden item UUIDs, and camo shape UUIDs."""
+        """Load stored stashed state, hidden item UUIDs, camo shape UUIDs, and parameters."""
         if not self.config_file or not os.path.exists(self.config_file):
             return
         try:
@@ -64,6 +65,7 @@ class PCBCamouflageDialog(wx.Dialog):
             self.hidden_uuids = data.get("hidden_uuids", [])
             self.last_stashed_layer = data.get("last_stashed_layer", None)
             self.camo_shape_uuids = data.get("camo_shape_uuids", [])
+            self.saved_params = data.get("params", {})
             self.VerifyAndSanitizeStashState()
         except Exception as e:
             print(f"[PCBCamouflage] Failed to load config: {e}")
@@ -103,13 +105,43 @@ class PCBCamouflageDialog(wx.Dialog):
             self.SaveConfig()
 
     def SaveConfig(self):
-        """Save stashed state, hidden item UUIDs, and camo shape UUIDs."""
+        """Save stashed state, hidden item UUIDs, camo shape UUIDs, and user parameters."""
         if not self.config_file:
             return
+
+        params = dict(self.saved_params)
+        if hasattr(self, "choice_side"):
+            params["side"] = self.choice_side.GetSelection()
+        if hasattr(self, "choice_pattern"):
+            params["pattern"] = self.choice_pattern.GetSelection()
+        if hasattr(self, "txt_scale_min"):
+            params["scale_min"] = self.txt_scale_min.GetValue()
+        if hasattr(self, "txt_scale_max"):
+            params["scale_max"] = self.txt_scale_max.GetValue()
+        if hasattr(self, "txt_line_w_min"):
+            params["line_w_min"] = self.txt_line_w_min.GetValue()
+        if hasattr(self, "txt_line_w_max"):
+            params["line_w_max"] = self.txt_line_w_max.GetValue()
+        if hasattr(self, "txt_angle_min"):
+            params["angle_min"] = self.txt_angle_min.GetValue()
+        if hasattr(self, "txt_angle_max"):
+            params["angle_max"] = self.txt_angle_max.GetValue()
+        if hasattr(self, "txt_pad_clearance"):
+            params["pad_clearance"] = self.txt_pad_clearance.GetValue()
+        if hasattr(self, "txt_margin"):
+            params["board_margin"] = self.txt_margin.GetValue()
+        if hasattr(self, "txt_seed"):
+            params["seed"] = self.txt_seed.GetValue()
+        if hasattr(self, "chk_clear_existing"):
+            params["clear_existing"] = self.chk_clear_existing.IsChecked()
+
+        self.saved_params = params
+
         data = {
             "hidden_uuids": list(set(self.hidden_uuids)),
             "last_stashed_layer": self.last_stashed_layer,
             "camo_shape_uuids": list(set(self.camo_shape_uuids)),
+            "params": params,
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -181,10 +213,12 @@ class PCBCamouflageDialog(wx.Dialog):
         grid = wx.FlexGridSizer(cols=2, vgap=6, hgap=10)
         grid.AddGrowableCol(1)
 
+        p = self.saved_params
+
         # Target side
         grid.Add(wx.StaticText(panel, label="Target Layer:"), 0, wx.ALIGN_CENTER_VERTICAL)
         self.choice_side = wx.Choice(panel, choices=["Front (F.Silkscreen)", "Back (B.Silkscreen)"])
-        self.choice_side.SetSelection(0)
+        self.choice_side.SetSelection(int(p.get("side", 0)))
         grid.Add(self.choice_side, 0, wx.EXPAND)
 
         # Pattern Style
@@ -193,37 +227,59 @@ class PCBCamouflageDialog(wx.Dialog):
             panel,
             choices=[
                 "Test Mule Swirl (Automotive Vortex / Spirals)",
-                "Geometric Dazzle (Angled Polygonal Stripes)",
-                "Zebra Waves (Organic Undulating Stripes)",
+                "Zebra Waves (Organic Undulating Flow Stripes)",
             ],
         )
-        self.choice_pattern.SetSelection(0)
+        self.choice_pattern.SetSelection(int(p.get("pattern", 0)))
+        self.choice_pattern.Bind(wx.EVT_CHOICE, self.OnPatternChanged)
         grid.Add(self.choice_pattern, 0, wx.EXPAND)
 
         # Pattern Scale
         grid.Add(wx.StaticText(panel, label="Pattern Scale (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.txt_scale = wx.TextCtrl(panel, value="8.0")
-        grid.Add(self.txt_scale, 0, wx.EXPAND)
+        scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.txt_scale_min = wx.TextCtrl(panel, value=str(p.get("scale_min", p.get("scale", "6.0"))))
+        self.txt_scale_max = wx.TextCtrl(panel, value=str(p.get("scale_max", p.get("scale", "10.0"))))
+        scale_sizer.Add(self.txt_scale_min, 1, wx.EXPAND)
+        scale_sizer.Add(wx.StaticText(panel, label=" - "), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4)
+        scale_sizer.Add(self.txt_scale_max, 1, wx.EXPAND)
+        grid.Add(scale_sizer, 0, wx.EXPAND)
 
         # Line Width
         grid.Add(wx.StaticText(panel, label="Line Width (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.txt_line_w = wx.TextCtrl(panel, value="0.8")
-        grid.Add(self.txt_line_w, 0, wx.EXPAND)
+        line_w_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.txt_line_w_min = wx.TextCtrl(panel, value=str(p.get("line_w_min", p.get("line_width", "0.6"))))
+        self.txt_line_w_max = wx.TextCtrl(panel, value=str(p.get("line_w_max", p.get("line_width", "1.0"))))
+        line_w_sizer.Add(self.txt_line_w_min, 1, wx.EXPAND)
+        line_w_sizer.Add(wx.StaticText(panel, label=" - "), 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4)
+        line_w_sizer.Add(self.txt_line_w_max, 1, wx.EXPAND)
+        grid.Add(line_w_sizer, 0, wx.EXPAND)
+
+        # Wave Angle (for Zebra Waves: 0=Horizontal, 90=Vertical) - placed right below Line Width
+        self.lbl_wave_angle = wx.StaticText(panel, label="Wave Angle (deg, 0=Horiz):")
+        grid.Add(self.lbl_wave_angle, 0, wx.ALIGN_CENTER_VERTICAL)
+        angle_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.txt_angle_min = wx.TextCtrl(panel, value=str(p.get("angle_min", p.get("wave_angle", "-5.0"))))
+        self.lbl_angle_dash = wx.StaticText(panel, label=" - ")
+        self.txt_angle_max = wx.TextCtrl(panel, value=str(p.get("angle_max", p.get("wave_angle", "5.0"))))
+        angle_sizer.Add(self.txt_angle_min, 1, wx.EXPAND)
+        angle_sizer.Add(self.lbl_angle_dash, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4)
+        angle_sizer.Add(self.txt_angle_max, 1, wx.EXPAND)
+        grid.Add(angle_sizer, 0, wx.EXPAND)
 
         # Pad Clearance
         grid.Add(wx.StaticText(panel, label="Pad Clearance (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.txt_pad_clearance = wx.TextCtrl(panel, value="0.4")
+        self.txt_pad_clearance = wx.TextCtrl(panel, value=str(p.get("pad_clearance", "0.4")))
         grid.Add(self.txt_pad_clearance, 0, wx.EXPAND)
 
         # Board Margin
         grid.Add(wx.StaticText(panel, label="Board Edge Margin (mm):"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.txt_margin = wx.TextCtrl(panel, value="0.5")
+        self.txt_margin = wx.TextCtrl(panel, value=str(p.get("board_margin", "0.5")))
         grid.Add(self.txt_margin, 0, wx.EXPAND)
 
         # Seed
         grid.Add(wx.StaticText(panel, label="Random Seed:"), 0, wx.ALIGN_CENTER_VERTICAL)
         seed_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.txt_seed = wx.TextCtrl(panel, value="42")
+        self.txt_seed = wx.TextCtrl(panel, value=str(p.get("seed", "42")))
         btn_rand_seed = wx.Button(panel, label="New Seed", size=(80, -1))
         btn_rand_seed.Bind(wx.EVT_BUTTON, self.OnRandomSeed)
         seed_sizer.Add(self.txt_seed, 1, wx.EXPAND | wx.RIGHT, 4)
@@ -236,8 +292,11 @@ class PCBCamouflageDialog(wx.Dialog):
         self.chk_clear_existing = wx.CheckBox(
             panel, label="Clear existing camouflage before generating (Replace mode)"
         )
-        self.chk_clear_existing.SetValue(False)
+        self.chk_clear_existing.SetValue(bool(p.get("clear_existing", False)))
         settings_box.Add(self.chk_clear_existing, 0, wx.ALL, 4)
+
+        # Initialize parameter enable/disable states based on current pattern
+        self.OnPatternChanged()
 
         sizer.Add(settings_box, 1, wx.EXPAND | wx.ALL, 6)
 
@@ -370,6 +429,23 @@ class PCBCamouflageDialog(wx.Dialog):
                 self.lbl_step1_status.SetForegroundColour(wx.Colour(80, 80, 80))
             self.lbl_step1_status.Refresh()
 
+    def OnPatternChanged(self, event=None):
+        """Update parameter availability based on selected pattern style."""
+        # Selection 0: Swirl (doesn't use wave_angle)
+        # Selection 1: Zebra (uses wave_angle)
+        is_zebra = (self.choice_pattern.GetSelection() == 1) if hasattr(self, "choice_pattern") else False
+        if hasattr(self, "lbl_wave_angle"):
+            self.lbl_wave_angle.Enable(is_zebra)
+        if hasattr(self, "txt_angle_min"):
+            self.txt_angle_min.Enable(is_zebra)
+        if hasattr(self, "lbl_angle_dash"):
+            self.lbl_angle_dash.Enable(is_zebra)
+        if hasattr(self, "txt_angle_max"):
+            self.txt_angle_max.Enable(is_zebra)
+        if event:
+            self.SaveConfig()
+            event.Skip()
+
     def OnGenerateCamo(self, event):
         self.board = pcbnew.GetBoard()
         self.camo_gen = CamoGenerator(self.board)
@@ -378,12 +454,22 @@ class PCBCamouflageDialog(wx.Dialog):
         side = "F" if self.choice_side.GetSelection() == 0 else "B"
 
         pattern_idx = self.choice_pattern.GetSelection()
-        pattern_types = ["swirl", "dazzle", "zebra"]
+        pattern_types = ["swirl", "zebra"]
         pattern_type = pattern_types[pattern_idx]
 
         try:
-            scale_mm = float(self.txt_scale.GetValue())
-            line_w_mm = float(self.txt_line_w.GetValue())
+            scale_min = float(self.txt_scale_min.GetValue())
+            scale_max = float(self.txt_scale_max.GetValue())
+            scale_range = (min(scale_min, scale_max), max(scale_min, scale_max))
+
+            line_w_min = float(self.txt_line_w_min.GetValue())
+            line_w_max = float(self.txt_line_w_max.GetValue())
+            line_w_range = (min(line_w_min, line_w_max), max(line_w_min, line_w_max))
+
+            angle_min = float(self.txt_angle_min.GetValue())
+            angle_max = float(self.txt_angle_max.GetValue())
+            angle_range = (min(angle_min, angle_max), max(angle_min, angle_max))
+
             pad_clr_mm = float(self.txt_pad_clearance.GetValue())
             margin_mm = float(self.txt_margin.GetValue())
             seed = int(self.txt_seed.GetValue())
@@ -404,8 +490,9 @@ class PCBCamouflageDialog(wx.Dialog):
             count, created_uuids = self.camo_gen.generate_camouflage(
                 side=side,
                 pattern_type=pattern_type,
-                scale_mm=scale_mm,
-                line_width_mm=line_w_mm,
+                scale_range=scale_range,
+                line_w_range=line_w_range,
+                angle_range=angle_range,
                 pad_clearance_mm=pad_clr_mm,
                 board_margin_mm=margin_mm,
                 seed=seed,

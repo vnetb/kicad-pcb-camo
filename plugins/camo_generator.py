@@ -285,43 +285,52 @@ class CamoGenerator:
 
         return silk_keepout
 
-    def generate_swirl_polygons(self, bounds, scale_mm=10.0, line_width_mm=0.8, seed=42):
+    def generate_swirl_polygons(self, bounds, scale_range=(6.0, 10.0), line_w_range=(0.6, 1.0), seed=42):
         """
         Generate automotive test mule swirl (spiral / vortex) ribbon polygons.
-        Fully randomizes vortex center positions, starting rotation angles, pitch, and directions.
+        Fully randomizes vortex center positions, starting rotation angles, pitch, directions,
+        and samples scale and line width from user-specified ranges.
         """
         random.seed(seed)
         x_min, y_min, x_max, y_max = bounds
         width = x_max - x_min
         height = y_max - y_min
 
+        if isinstance(scale_range, (int, float)):
+            s_min = s_max = float(scale_range)
+        else:
+            s_min, s_max = float(scale_range[0]), float(scale_range[1])
+
+        if isinstance(line_w_range, (int, float)):
+            w_min = w_max = float(line_w_range)
+        else:
+            w_min, w_max = float(line_w_range[0]), float(line_w_range[1])
+
+        avg_scale = max(1.0, (s_min + s_max) / 2.0)
         poly_set = pcbnew.SHAPE_POLY_SET()
 
         # Distribute vortex centers with random positions and density
-        area = max(1.0, width * height)
-        cell_area = max(4.0, scale_mm * scale_mm)
-        num_centers = max(2, int(area / cell_area) + random.randint(1, 3))
-
         centers = []
-        # Mix jittered grid and scatter for natural organic distribution
-        cols = max(1, int(width / scale_mm))
-        rows = max(1, int(height / scale_mm))
+        cols = max(1, int(width / avg_scale))
+        rows = max(1, int(height / avg_scale))
 
         for r in range(rows + 1):
             for c in range(cols + 1):
                 # Generous jitter around cell to avoid rigid grid alignment
-                cx = x_min + (c + random.uniform(-0.6, 0.6)) * scale_mm
-                cy = y_min + (r + random.uniform(-0.6, 0.6)) * scale_mm
+                cx = x_min + (c + random.uniform(-0.6, 0.6)) * avg_scale
+                cy = y_min + (r + random.uniform(-0.6, 0.6)) * avg_scale
                 direction = random.choice([-1, 1])
                 rot_offset = random.uniform(0, 2.0 * math.pi)
                 pitch_mult = random.uniform(0.75, 1.25)
                 arm_count = random.choice([2, 3])
-                max_radius = scale_mm * random.uniform(1.2, 2.0)
-                centers.append((cx, cy, direction, rot_offset, pitch_mult, arm_count, max_radius))
+                center_scale = random.uniform(s_min, s_max)
+                center_width = random.uniform(w_min, w_max)
+                max_radius = center_scale * random.uniform(1.2, 2.0)
+                centers.append((cx, cy, direction, rot_offset, pitch_mult, arm_count, max_radius, center_scale, center_width))
 
         # Generate spiral arms from each center
-        for cx, cy, direction, rot_offset, pitch_mult, num_arms, max_r in centers:
-            half_w = (line_width_mm * random.uniform(0.9, 1.1)) / 2.0
+        for cx, cy, direction, rot_offset, pitch_mult, num_arms, max_r, center_scale, center_width in centers:
+            half_w = (center_width * random.uniform(0.9, 1.1)) / 2.0
 
             for arm in range(num_arms):
                 base_angle = rot_offset + (2.0 * math.pi / num_arms) * arm
@@ -329,8 +338,8 @@ class CamoGenerator:
                 points_inner = []
 
                 # Trace spiral: r = b * theta
-                b = ((scale_mm / 2.0) / (2.0 * math.pi)) * pitch_mult
-                steps = max(25, int(50 * (max_r / (scale_mm * 1.5))))
+                b = ((center_scale / 2.0) / (2.0 * math.pi)) * pitch_mult
+                steps = max(25, int(50 * (max_r / (center_scale * 1.5))))
 
                 for s in range(4, steps):
                     theta = s * 0.14
@@ -358,128 +367,93 @@ class CamoGenerator:
 
         return poly_set
 
-    def generate_dazzle_polygons(self, bounds, scale_mm=8.0, seed=42):
+    def generate_zebra_polygons(self, bounds, scale_range=(6.0, 10.0), line_w_range=(0.6, 1.0),
+                                angle_range=(-5.0, 5.0), seed=42):
         """
-        Generate geometric dazzle camouflage (angled alternating polygonal blocks).
+        Generate organic undulating zebra / flow wave camouflage.
+        Wave orientation angle is chosen within angle_range (deg).
+        Wave phase, amplitude, scale, and line widths vary within user-specified ranges.
         """
         random.seed(seed)
         x_min, y_min, x_max, y_max = bounds
+        cx = (x_min + x_max) / 2.0
+        cy = (y_min + y_max) / 2.0
         width = x_max - x_min
         height = y_max - y_min
+        diag = math.hypot(width, height)
+
+        if isinstance(scale_range, (int, float)):
+            s_min = s_max = float(scale_range)
+        else:
+            s_min, s_max = float(scale_range[0]), float(scale_range[1])
+
+        if isinstance(line_w_range, (int, float)):
+            w_min = w_max = float(line_w_range)
+        else:
+            w_min, w_max = float(line_w_range[0]), float(line_w_range[1])
+
+        if isinstance(angle_range, (int, float)):
+            a_min = a_max = float(angle_range)
+        else:
+            a_min, a_max = float(angle_range[0]), float(angle_range[1])
 
         poly_set = pcbnew.SHAPE_POLY_SET()
 
-        angles = [math.radians(30), math.radians(45), math.radians(60),
-                  math.radians(120), math.radians(135), math.radians(150)]
+        avg_scale = max(1.0, (s_min + s_max) / 2.0)
+        step_dist = avg_scale * random.uniform(0.9, 1.3)
+        offset_init = random.uniform(-step_dist, step_dist)
+        num_stripes = max(2, int((diag * 0.7) / step_dist) + 1)
 
-        # Divide into grid cells with random angled stripes in each
-        cell_size = scale_mm * 1.5
-        cols = max(1, int(width / cell_size) + 1)
-        rows = max(1, int(height / cell_size) + 1)
+        step_t = max(0.5, avg_scale / 16.0)
+        t_range = diag * 0.75
+        steps = max(20, int((2.0 * t_range) / step_t))
 
-        for r in range(rows):
-            for c in range(cols):
-                bx0 = x_min + c * cell_size
-                by0 = y_min + r * cell_size
-                bx1 = min(x_max, bx0 + cell_size)
-                by1 = min(y_max, by0 + cell_size)
+        for i in range(-num_stripes, num_stripes + 1):
+            base_offset = i * step_dist + offset_init
 
-                angle = random.choice(angles)
-                stripe_w = scale_mm * random.uniform(0.3, 0.6)
+            # Random angle chosen per stripe within user-specified [a_min, a_max] range
+            stripe_angle_deg = random.uniform(a_min, a_max)
+            angle = math.radians(stripe_angle_deg)
+            dir_x = math.cos(angle)
+            dir_y = math.sin(angle)
+            norm_x = -math.sin(angle)
+            norm_y = math.cos(angle)
 
-                # Generate angled strips within this bounding cell
-                cos_a = math.cos(angle)
-                sin_a = math.sin(angle)
+            stripe_w = random.uniform(w_min, w_max)
+            half_w = stripe_w / 2.0
+            stripe_scale = random.uniform(s_min, s_max)
 
-                diag = math.hypot(cell_size, cell_size)
-                num_stripes = int(diag / (stripe_w * 2)) + 2
-
-                cx = (bx0 + bx1) / 2.0
-                cy = (by0 + by1) / 2.0
-
-                for i in range(-num_stripes, num_stripes, 2):
-                    offset = i * stripe_w
-                    # Strip center line offset along normal
-                    nx = -sin_a
-                    ny = cos_a
-
-                    p1x = cx + offset * nx - diag * cos_a
-                    p1y = cy + offset * ny - diag * sin_a
-                    p2x = cx + offset * nx + diag * cos_a
-                    p2y = cy + offset * ny + diag * sin_a
-
-                    # Extrude by stripe_w
-                    half = stripe_w / 2.0
-                    strip_pts = [
-                        (p1x - half * nx, p1y - half * ny),
-                        (p2x - half * nx, p2y - half * ny),
-                        (p2x + half * nx, p2y + half * ny),
-                        (p1x + half * nx, p1y + half * ny)
-                    ]
-
-                    strip_poly = pcbnew.SHAPE_POLY_SET()
-                    strip_poly.AddOutline(make_line_chain(strip_pts))
-
-                    # Intersect with cell box
-                    cell_poly = pcbnew.SHAPE_POLY_SET()
-                    cell_poly.AddOutline(make_line_chain([
-                        (bx0, by0),
-                        (bx1, by0),
-                        (bx1, by1),
-                        (bx0, by1)
-                    ]))
-
-                    strip_poly.BooleanIntersection(cell_poly)
-                    for oi in range(strip_poly.OutlineCount()):
-                        poly_set.AddOutline(strip_poly.Outline(oi))
-
-        return poly_set
-
-    def generate_zebra_polygons(self, bounds, scale_mm=8.0, line_width_mm=0.8, seed=42):
-        """
-        Generate organic undulating zebra waves.
-        """
-        random.seed(seed)
-        x_min, y_min, x_max, y_max = bounds
-        height = y_max - y_min
-
-        poly_set = pcbnew.SHAPE_POLY_SET()
-        half_w = line_width_mm / 2.0
-
-        num_stripes = max(2, int(height / scale_mm))
-        step_y = height / num_stripes
-
-        for i in range(num_stripes + 1):
-            base_y = y_min + i * step_y
-            freq1 = 2.0 * math.pi / (scale_mm * random.uniform(2.0, 4.0))
-            freq2 = 2.0 * math.pi / (scale_mm * random.uniform(0.8, 1.5))
-            amp1 = scale_mm * 0.25
-            amp2 = scale_mm * 0.1
-            phase1 = random.uniform(0, 2 * math.pi)
-            phase2 = random.uniform(0, 2 * math.pi)
+            freq1 = 2.0 * math.pi / (stripe_scale * random.uniform(2.5, 4.5))
+            freq2 = 2.0 * math.pi / (stripe_scale * random.uniform(0.9, 1.6))
+            amp1 = stripe_scale * random.uniform(0.2, 0.4)
+            amp2 = stripe_scale * random.uniform(0.08, 0.16)
+            phase1 = random.uniform(0, 2.0 * math.pi)
+            phase2 = random.uniform(0, 2.0 * math.pi)
 
             pts_top = []
             pts_bot = []
 
-            steps = max(10, int((x_max - x_min) / 0.5))
-            dx = (x_max - x_min) / steps
-
             for s in range(steps + 1):
-                x = x_min + s * dx
-                wave = amp1 * math.sin(freq1 * x + phase1) + amp2 * math.sin(freq2 * x + phase2)
-                my = base_y + wave
+                t = -t_range + s * ((2.0 * t_range) / steps)
+                wave = amp1 * math.sin(freq1 * t + phase1) + amp2 * math.sin(freq2 * t + phase2)
 
-                pts_top.append((x, my - half_w))
-                pts_bot.append((x, my + half_w))
+                # Center point of wave
+                mx = cx + t * dir_x + (base_offset + wave) * norm_x
+                my = cy + t * dir_y + (base_offset + wave) * norm_y
 
-            strip_pts = pts_top + list(reversed(pts_bot))
-            poly_set.AddOutline(make_line_chain(strip_pts))
+                pts_top.append((mx + half_w * norm_x, my + half_w * norm_y))
+                pts_bot.append((mx - half_w * norm_x, my - half_w * norm_y))
+
+            if len(pts_top) >= 3:
+                strip_pts = pts_top + list(reversed(pts_bot))
+                poly_set.AddOutline(make_line_chain(strip_pts))
 
         return poly_set
 
-    def generate_camouflage(self, side="F", pattern_type="swirl", scale_mm=8.0,
-                            line_width_mm=0.8, pad_clearance_mm=0.4,
-                            board_margin_mm=0.5, seed=42, existing_uuids=None):
+    def generate_camouflage(self, side="F", pattern_type="swirl", scale_range=(6.0, 10.0),
+                            line_w_range=(0.6, 1.0), pad_clearance_mm=0.4,
+                            board_margin_mm=0.5, seed=42, existing_uuids=None,
+                            angle_range=(-5.0, 5.0)):
         """
         Main entry point to generate camouflage shapes and add them to the board.
         If existing_uuids is provided, automatically merges the new layer with existing shapes.
@@ -489,14 +463,13 @@ class CamoGenerator:
         bounds = self.get_board_bounds(margin_mm=board_margin_mm)
 
         # 1. Generate base camo poly set based on pattern type
-        if pattern_type == "dazzle":
-            camo_poly = self.generate_dazzle_polygons(bounds, scale_mm=scale_mm, seed=seed)
-        elif pattern_type == "zebra":
-            camo_poly = self.generate_zebra_polygons(bounds, scale_mm=scale_mm,
-                                                     line_width_mm=line_width_mm, seed=seed)
+        if pattern_type == "zebra":
+            camo_poly = self.generate_zebra_polygons(bounds, scale_range=scale_range,
+                                                     line_w_range=line_w_range,
+                                                     angle_range=angle_range, seed=seed)
         else:  # default: swirl
-            camo_poly = self.generate_swirl_polygons(bounds, scale_mm=scale_mm,
-                                                     line_width_mm=line_width_mm, seed=seed)
+            camo_poly = self.generate_swirl_polygons(bounds, scale_range=scale_range,
+                                                     line_w_range=line_w_range, seed=seed)
 
         # 2. If layering on top of existing camo, collect existing outlines to merge seamlessly
         existing_shapes = []
