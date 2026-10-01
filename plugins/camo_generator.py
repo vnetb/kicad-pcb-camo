@@ -33,6 +33,34 @@ def make_line_chain(points):
     return chain
 
 
+def safe_inflate(poly_set, amount_nm, max_error_nm=10000):
+    """
+    Inflate a SHAPE_POLY_SET accommodating KiCad 7, 8, and 9 API signatures.
+    """
+    if poly_set.OutlineCount() == 0 or amount_nm <= 0:
+        return
+
+    # Find corner strategy enum if available
+    strategy = 0
+    for strat_name in ("ROUND", "CHAMFER_ALL_CORNERS", "CHAMFER_ACUTE_CORNERS"):
+        if hasattr(pcbnew.SHAPE_POLY_SET, strat_name):
+            strategy = getattr(pcbnew.SHAPE_POLY_SET, strat_name)
+            break
+
+    for args in [
+        (amount_nm, strategy, max_error_nm),          # KiCad 9 (amount, strategy, max_error)
+        (amount_nm, strategy, max_error_nm, False),   # KiCad 9 (amount, strategy, max_error, simplify)
+        (amount_nm, max_error_nm),                   # KiCad 8 / 7 (amount, max_error)
+        (amount_nm, 16),                             # KiCad legacy (amount, segments)
+        (amount_nm,),                                # Fallback 1-arg
+    ]:
+        try:
+            poly_set.Inflate(*args)
+            return
+        except TypeError:
+            continue
+
+
 class CamoGenerator:
     """Generates silkscreen camouflage patterns with automatic pad avoidance."""
 
@@ -94,7 +122,7 @@ class CamoGenerator:
 
         # Inflate all pads by clearance
         if clearance_nm > 0 and keepout.OutlineCount() > 0:
-            keepout.Inflate(clearance_nm, 16)
+            safe_inflate(keepout, clearance_nm)
 
         return keepout
 
